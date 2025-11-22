@@ -1,1 +1,0 @@
-# angular-python-fullstack-app-deployment-terraform
