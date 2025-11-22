@@ -213,10 +213,12 @@ resource "aws_instance" "at-devops-backend-ec2-ayoub-elmarchoum" {
 #!/bin/bash
 set -e
 
-# Chemin du script
-DEPLOY_SCRIPT=/home/ubuntu/deploy.sh
+# Chemin du script qui sera exécuté par root
+DEPLOY_SCRIPT=/tmp/deploy.sh 
 
-# Création du script deploy.sh
+echo "=== Démarrage du user_data (Création et exécution de deploy.sh) ==="
+
+# 1. Création du script deploy.sh dans /tmp avec le contenu exact fourni
 cat > "$DEPLOY_SCRIPT" <<'SCRIPT'
 #!/bin/bash
 set -e
@@ -224,41 +226,53 @@ set -e
 PROJECT_DIR=/home/ubuntu/employee-backend
 SWAPFILE=/swapfile
 
+echo "=== Exécution de deploy.sh (Démarrage du déploiement) ==="
+
 # Création / activation swap si nécessaire
 if [ ! -f "$SWAPFILE" ]; then
     echo "Création du swapfile..."
-    sudo fallocate -l 2G "$SWAPFILE"
+    # Utilisation de dd à la place de fallocate pour une meilleure compatibilité
+    sudo dd if=/dev/zero of="$SWAPFILE" bs=1M count=2048
     sudo chmod 600 "$SWAPFILE"
     sudo mkswap "$SWAPFILE"
+    echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 fi
 sudo swapon --show || sudo swapon "$SWAPFILE"
 
 # Mise à jour du système
+echo "Mise à jour et installation des dépendances système..."
+sudo apt-get clean
 sudo apt update -y
 sudo apt upgrade -y
 
 # Installation des dépendances
 sudo apt install -y git python3 python3-venv python3-pip build-essential python3-dev
 
-# Clonage ou mise à jour du projet
+# 3. Clonage ou mise à jour du projet (Exécuté en tant que ubuntu)
+echo "Clonage, Venv, et Installation des dépendances Python par l'utilisateur 'ubuntu'..."
+
+# Assurer que le répertoire existe et appartient à ubuntu pour le clone
+sudo mkdir -p "$PROJECT_DIR"
+sudo chown ubuntu:ubuntu "$PROJECT_DIR"
+
 if [ ! -d "$PROJECT_DIR/.git" ]; then
     sudo -u ubuntu git clone https://gitlab.com/imad-omar-nabi-projects/employee-backend.git "$PROJECT_DIR"
 else
-    cd "$PROJECT_DIR"
-    sudo -u ubuntu git pull
+    # S'assurer que les commandes cd et git pull sont exécutées dans le bon contexte et répertoire
+    sudo -u ubuntu bash -c "cd \"$PROJECT_DIR\" && git pull"
 fi
 
 cd "$PROJECT_DIR"
 
-# Création de l'environnement virtuel Python
+# Création de l'environnement virtuel Python (Exécuté en tant que ubuntu)
 sudo -u ubuntu python3 -m venv venv
 sudo -u ubuntu ./venv/bin/pip install --upgrade pip
 sudo -u ubuntu ./venv/bin/pip install -r requirements.txt
 
-# Patch app.py pour écouter sur toutes les interfaces
+# Patch app.py pour écouter sur toutes les interfaces (Exécuté en tant que ubuntu, modifie un fichier ubuntu)
 sudo -u ubuntu sed -i 's|app.run(.*)|app.run(host="0.0.0.0", port=8081)|' app.py
 
-# Création du service systemd
+# Création du service systemd (Root)
 echo "Création du service systemd..."
 sudo tee /etc/systemd/system/employee-backend.service > /dev/null <<'SERVICE'
 [Unit]
@@ -275,7 +289,7 @@ Restart=always
 WantedBy=multi-user.target
 SERVICE
 
-# Activation et démarrage du service
+# Activation et démarrage du service (Root)
 echo "Activation et démarrage du service..."
 sudo systemctl daemon-reload
 sudo systemctl enable employee-backend
@@ -284,11 +298,15 @@ sudo systemctl status employee-backend --no-pager
 
 echo "=== Déploiement terminé ==="
 SCRIPT
-# Rendre le script exécutable et l’exécuter
-sudo chmod +x "$DEPLOY_SCRIPT"
-sudo bash "$DEPLOY_SCRIPT"
-EOF
 
+# 2. Rendre le script exécutable
+chmod +x "$DEPLOY_SCRIPT"
+
+# 3. Exécuter le script généré en tant que root
+bash "$DEPLOY_SCRIPT"
+
+echo "=== Déploiement Backend terminé (user_data principal) ==="
+EOF
 }
 
 # =====================
